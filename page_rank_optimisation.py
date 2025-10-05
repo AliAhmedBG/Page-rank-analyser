@@ -1,149 +1,187 @@
 """
-This page contains code which creates a graph data structure using dictionaries and it contains two algorithms, one being random walk and the other being random distribution
+This script estimates the PageRank of nodes in a web graph using two methods:
+1. Stochastic (random walk)
+2. Distribution (probability redistribution)
+
+This version is optimized compared to page_rank.py:
+- Uses defaultdict for faster graph construction
+- Precomputes outgoing edge counts to reduce repeated calculations
 """
+
 import sys
 import os
 import time
 import argparse
 import random
-
+# Efficient dictionary subclass for lists
 from collections import defaultdict
+# Custom progress bar for feedback
+from progress import Progress
 
-"this function is what initialises and creates the graph data structure"
+
 def load_graph(args):
-    """Load graph from text file
-    Parameters:
-    args -- arguments named tuple
-    Returns:
-    A dict mapling a URL (str) to a list of target URLs (str).
     """
+    Load graph from a text file.
 
-    "initialises the graph using defaultdict instead of a standard dictionary"
+    Each line in the file should contain two URLs (from, to),
+    representing a directed edge in the graph.
+
+    Parameters:
+    - args: Parsed command-line arguments
+
+    Returns:
+    - A defaultdict mapping a URL (str) to a list of target URLs (str)
+    """
+    # Automatically initializes empty lists
     graph = defaultdict(list)
 
-    "iterates through this loop for each line in the datafile"
     for line in args.datafile:
-        "splits the two links into a node and target node"
         node, target = line.split()
-        "adds the target node to the list of outgoing edges of the original node"
+        # Append target to node’s adjacency list
         graph[node].append(target)
 
     return graph
 
-"this function returns the stats for the graph which are the number of nodes and the number of edges"
-def print_stats(graph):
-    """Print number of nodes and edges in the given graph"""
-    print("The number of nodes is ", len(graph) )
 
-    edge_count = (0)
+def print_stats(graph):
+    """
+    Print basic graph statistics:
+    - Total number of nodes
+    - Total number of directed edges
+    """
+    print("The number of nodes is", len(graph))
+
+    edge_count = 0
     for node, child in graph.items():
         edge_count += len(child)
 
-    print("The number of edges is ", edge_count)
+    print("The number of edges is", edge_count)
 
 
 def stochastic_page_rank(graph, args):
-    """Stochastic PageRank estimation
-    Parameters:
-    graph -- a graph object as returned by load_graph()
-    args -- arguments named tuple
-    Returns:
-    A dict that assigns each page its hit frequency
-    This function estimates the Page Rank by counting how frequently
-    a random walk that starts on a random node will after n_steps end
-    on each node of the given graph.
     """
+    Estimate PageRank using the stochastic (random walk) method.
 
-    "creates a dictionary to map each node to the number of outgoing edges it has"
+    Optimisation:
+    - Precompute the number of outgoing edges for each node
+    - Use defaultdict for hit counts
+
+    Parameters:
+    - graph: Dictionary of node → [outgoing nodes]
+    - args: Command-line arguments
+
+    Returns:
+    - Dictionary of {node: hit_count}
+    """
+    # precalculate number of outgoing edges
     out_node = {node: len(targets) for node, targets in graph.items()}
 
-    "creates a list of all the items in the graph"
     nodes = list(graph.keys())
-
-    "initialises a dictionary to store the number of hits for each link and sets it to 0"
+    # Default to 0 hits for all nodes
     hit_count = defaultdict(int)
 
-    "randomly chooses a node to start on"
     current_node = random.choice(nodes)
-
-    "increments the hit counter for the starting node"
     hit_count[current_node] += 1
 
-    "carry out the random walk for the specified number of repeats by the argument"
+    prog = Progress(args.repeats, title="Stochastic PageRank")
+
     for x in range(args.repeats):
-        "if the current node is not in the graph or has no outgoing edged then choose a new one"
+        # If the node has no outgoing edges, move to random node
         if current_node not in graph or out_node[current_node] == 0:
             current_node = random.choice(nodes)
         else:
-            "chooses the next node from the outgoing edges of the current node at random"
+            # Choose one of the outgoing edges at random
             current_node = random.choice(graph[current_node])
 
-        "increments the hit counter for the new node"
         hit_count[current_node] += 1
 
-    "returns the hit count dictionary which represents the pagerank estimation"
+        prog += 1
+        # Show progress bar periodically
+        if x % 10000 == 0:
+            prog.show()
+
+    prog.finish()
     return hit_count
 
+
 def distribution_page_rank(graph, args):
-    """Probabilistic PageRank estimation
-    Parameters:
-    graph -- a graph object as returned by load_graph()
-    args -- arguments named tuple
-    Returns:
-    A dict that assigns each page its probability to be reached
-    This function estimates the Page Rank by iteratively calculating
-    the probability that a random walker is currently on any node.
     """
+    Estimate PageRank using the distribution (iterative) method.
 
-    "variable which holds the total number of nodes in the graph"
+    Method:
+    - Start with equal probability on all nodes
+    - At each step, redistribute the probabilities to outgoing edges
+    - After several iterations, the values converge to PageRank
+
+    Parameters:
+    - graph: Dictionary of node → [outgoing nodes]
+    - args: Command-line arguments
+
+    Returns:
+    - Dictionary of {node: probability}
+    """
     nodes = len(graph.keys())
-    "initialises a dictionary to store the probability of each node being hit which at start is set to 1 / each node in the graph"
-    node_prob = {node: 1/nodes for node in graph}
+    # Equal initial probability
+    node_prob = {node: 1 / nodes for node in graph}
 
-    "performs the probability distribution for the specified number of steps by the argument"
     for x in range(args.steps):
-        "creates a new dictionary to store the probability of the next node which is set to 0 at the start"
         next_prob = {node: 0 for node in graph}
-        "loops depending on the number of nodes in the graph"
+
         for node in graph:
-            "divide the current nodes probability between the neighboring nodes equally"
-            p = node_prob[node] / len(graph[node])
-            "add this probability to each neighboring node"
-            for target in graph[node]:
-                next_prob[target] += p
-        "update the node probability for he next iteration"
+            if len(graph[node]) > 0:
+                # Divide current node’s probability equally among neighbors
+                p = node_prob[node] / len(graph[node])
+                for target in graph[node]:
+                    next_prob[target] += p
+
+        # Update for next iteration
         node_prob = next_prob
+
     return node_prob
 
-"Create an argument parser to handle command-line input for the PageRank estimation"
+
+# Command-line argument parser
 parser = argparse.ArgumentParser(description="Estimates page ranks from link information")
+
 parser.add_argument('datafile', nargs='?', type=argparse.FileType('r'),
-default=sys.stdin,
-help="Textfile of links among web pages as URL tuples")
+                    default=sys.stdin,
+                    help="Text file of links among web pages as URL tuples (from to)")
+
 parser.add_argument('-m', '--method', choices=('stochastic', 'distribution'),
-default='stochastic',
-help="selected page rank algorithm")
-parser.add_argument('-r', '--repeats', type=int, default=1_000_000, help="number of repetitions")
-parser.add_argument('-s', '--steps', type=int, default=100, help="number of steps a walker takes")
-parser.add_argument('-n', '--number', type=int, default=20, help="number of results shown")
+                    default='stochastic',
+                    help="Choose the PageRank algorithm to use")
+
+parser.add_argument('-r', '--repeats', type=int, default=1_000_000,
+                    help="Number of steps for stochastic PageRank")
+
+parser.add_argument('-s', '--steps', type=int, default=100,
+                    help="Number of iterations for distribution PageRank")
+
+parser.add_argument('-n', '--number', type=int, default=20,
+                    help="How many top results to display")
+
 
 if __name__ == '__main__':
-    "parses command line arguments and calls the appropriate method"
+    # Parse command-line arguments
     args = parser.parse_args()
+
+    # Choose algorithm
     algorithm = distribution_page_rank if args.method == 'distribution' else stochastic_page_rank
 
-graph = load_graph(args)
+    # Load the graph and print statistics
+    graph = load_graph(args)
+    print_stats(graph)
 
-print_stats(graph)
+    # Execute the selected PageRank algorithm
+    start = time.time()
+    ranking = algorithm(graph, args)
+    stop = time.time()
+    elapsed = stop - start
 
-start = time.time()
-ranking = algorithm(graph, args)
-stop = time.time()
-time = stop - start
+    # Sort results by score, highest first
+    top = sorted(ranking.items(), key=lambda item: item[1], reverse=True)
 
-"sort nodes by descending page rang value"
-top = sorted(ranking.items(), key=lambda item: item[1], reverse=True)
-"display top ranked links"
-sys.stderr.write(f"Top {args.number} pages:\n")
-print('\n'.join(f'{100*v:.2f}\t{k}' for k,v in top[:args.number]))
-sys.stderr.write(f"Calculation took {time:.2f} seconds.\n")
+    # Print top results
+    sys.stderr.write(f"Top {args.number} pages:\n")
+    print('\n'.join(f'{100 * v:.2f}\t{k}' for k, v in top[:args.number]))
+    sys.stderr.write(f"Calculation took {elapsed:.2f} seconds.\n")
